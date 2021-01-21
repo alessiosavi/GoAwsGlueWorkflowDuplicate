@@ -1,0 +1,8 @@
+{
+  "workflow_name": "my_workflow",
+  "prefix": "prod-",
+  "replacer": {
+    "test": "prod",
+    "-v0.0.1": ""
+  }
+}
