@@ -71,9 +71,24 @@ func copyWorkflow(glueConnection *glue.Client, conf conf) {
 	if err != nil {
 		panic(err)
 	}
-	// Remove all the workflow that start with the given prefix
+	// Remove the workflow if already exists
 	for _, workflow := range workflows.Workflows {
-		if strings.HasPrefix(workflow, conf.Prefix) {
+		if workflow == conf.Prefix+conf.WorkflowName {
+			getWorkflow, err := glueConnection.GetWorkflow(context.Background(), &glue.GetWorkflowInput{
+				Name:         aws.String(workflow),
+				IncludeGraph: aws.Bool(true),
+			})
+			if err != nil {
+				panic(err)
+			}
+			for _, node := range getWorkflow.Workflow.Graph.Nodes {
+				if node.TriggerDetails != nil && node.TriggerDetails.Trigger != nil {
+					if _, err := glueConnection.DeleteTrigger(context.Background(), &glue.DeleteTriggerInput{Name: node.TriggerDetails.Trigger.Name}); err != nil {
+						panic(err)
+					}
+				}
+
+			}
 			_, err = glueConnection.DeleteWorkflow(context.Background(), &glue.DeleteWorkflowInput{
 				Name: aws.String(workflow),
 			})

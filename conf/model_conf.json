@@ -1,0 +1,8 @@
+{
+  "workflow_name": "thom-browne-classic-model",
+  "prefix": "prod-",
+  "replacer": {
+    "cdk-thom-browne-classic-": "",
+    "-v0.0.1": ""
+  }
+}
