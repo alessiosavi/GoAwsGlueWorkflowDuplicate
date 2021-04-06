@@ -16,9 +16,11 @@ import (
 )
 
 type conf struct {
-	WorkflowName string            `json:"workflow_name"`
-	Prefix       string            `json:"prefix"`
-	Replacer     map[string]string `json:"replacer"`
+	WorkflowName         string            `json:"workflow_name"`
+	WorkflowRegion       string            `json:"workflow_region"`
+	WorkflowTargetRegion string            `json:"workflow_target_region"`
+	Prefix               string            `json:"prefix"`
+	Replacer             map[string]string `json:"replacer"`
 }
 
 func (c *conf) Validate() {
@@ -32,10 +34,6 @@ func (c *conf) Validate() {
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Llongfile)
 
-	cfg, err := config.LoadDefaultConfig(context.Background())
-	if err != nil {
-		panic(err)
-	}
 	confFile := flag.String("conf", "", "Path of the configuration file")
 	flag.Parse()
 	if stringutils.IsBlank(*confFile) {
@@ -60,21 +58,26 @@ func main() {
 		log.Println("Using the following configuration:\n" + string(indent))
 	}
 
-	glueClient := glue.New(glue.Options{Credentials: cfg.Credentials, Region: cfg.Region})
-
-	copyWorkflow(glueClient, configuration)
+	copyWorkflow(configuration)
 
 }
 
-func copyWorkflow(glueConnection *glue.Client, conf conf) {
-	workflows, err := glueConnection.ListWorkflows(context.Background(), &glue.ListWorkflowsInput{})
+func copyWorkflow(conf conf) {
+	cfg, err := config.LoadDefaultConfig(context.Background())
+	if err != nil {
+		panic(err)
+	}
+	glueBaseRegionClient := glue.New(glue.Options{Credentials: cfg.Credentials, Region: conf.WorkflowRegion})
+	glueTargetRegionClient := glue.New(glue.Options{Credentials: cfg.Credentials, Region: conf.WorkflowTargetRegion})
+
+	workflows, err := glueTargetRegionClient.ListWorkflows(context.Background(), &glue.ListWorkflowsInput{})
 	if err != nil {
 		panic(err)
 	}
 	// Remove the workflow if already exists
 	for _, workflow := range workflows.Workflows {
 		if workflow == conf.Prefix+conf.WorkflowName {
-			getWorkflow, err := glueConnection.GetWorkflow(context.Background(), &glue.GetWorkflowInput{
+			getWorkflow, err := glueTargetRegionClient.GetWorkflow(context.Background(), &glue.GetWorkflowInput{
 				Name:         aws.String(workflow),
 				IncludeGraph: aws.Bool(true),
 			})
@@ -83,13 +86,13 @@ func copyWorkflow(glueConnection *glue.Client, conf conf) {
 			}
 			for _, node := range getWorkflow.Workflow.Graph.Nodes {
 				if node.TriggerDetails != nil && node.TriggerDetails.Trigger != nil {
-					if _, err := glueConnection.DeleteTrigger(context.Background(), &glue.DeleteTriggerInput{Name: node.TriggerDetails.Trigger.Name}); err != nil {
+					if _, err := glueTargetRegionClient.DeleteTrigger(context.Background(), &glue.DeleteTriggerInput{Name: node.TriggerDetails.Trigger.Name}); err != nil {
 						panic(err)
 					}
 				}
 
 			}
-			_, err = glueConnection.DeleteWorkflow(context.Background(), &glue.DeleteWorkflowInput{
+			_, err = glueTargetRegionClient.DeleteWorkflow(context.Background(), &glue.DeleteWorkflowInput{
 				Name: aws.String(workflow),
 			})
 			if err != nil {
@@ -99,7 +102,7 @@ func copyWorkflow(glueConnection *glue.Client, conf conf) {
 	}
 
 	// Retrieve the workflow that have to be copied
-	workflow, err := glueConnection.GetWorkflow(context.Background(), &glue.GetWorkflowInput{
+	workflow, err := glueBaseRegionClient.GetWorkflow(context.Background(), &glue.GetWorkflowInput{
 		Name:         aws.String(conf.WorkflowName),
 		IncludeGraph: aws.Bool(true),
 	})
@@ -107,8 +110,9 @@ func copyWorkflow(glueConnection *glue.Client, conf conf) {
 		panic(err)
 	}
 	// Create a new workflow with the same properties
-	_, err = glueConnection.CreateWorkflow(context.Background(), &glue.CreateWorkflowInput{
-		Name:                 aws.String(conf.Prefix + conf.WorkflowName),
+	workflowName := aws.String(conf.Prefix + "-" + conf.WorkflowName)
+	_, err = glueTargetRegionClient.CreateWorkflow(context.Background(), &glue.CreateWorkflowInput{
+		Name:                 workflowName,
 		DefaultRunProperties: workflow.Workflow.DefaultRunProperties,
 		Description:          workflow.Workflow.Description,
 		MaxConcurrentRuns:    workflow.Workflow.MaxConcurrentRuns,
@@ -130,7 +134,7 @@ func copyWorkflow(glueConnection *glue.Client, conf conf) {
 		log.Println("Name: " + *node.Name)
 		node.Name = aws.String(conf.Prefix + *node.Name)
 		if node.TriggerDetails != nil && node.TriggerDetails.Trigger != nil {
-			node.TriggerDetails.Trigger.WorkflowName = aws.String(conf.Prefix + conf.WorkflowName)
+			node.TriggerDetails.Trigger.WorkflowName = workflowName
 
 			if len(node.TriggerDetails.Trigger.Actions) > 0 {
 				node.TriggerDetails.Trigger.Name = aws.String(conf.Prefix + *node.TriggerDetails.Trigger.Name)
@@ -142,7 +146,7 @@ func copyWorkflow(glueConnection *glue.Client, conf conf) {
 					}
 					if node.TriggerDetails.Trigger.Actions[i].CrawlerName != nil {
 						// NOTE: In case of crawler does not exists, the (obviously not working) workflow will be created without issue
-						node.TriggerDetails.Trigger.Actions[i].CrawlerName = aws.String(conf.Prefix + *node.TriggerDetails.Trigger.Actions[i].CrawlerName)
+						node.TriggerDetails.Trigger.Actions[i].CrawlerName = aws.String(conf.Prefix + "-" + *node.TriggerDetails.Trigger.Actions[i].CrawlerName)
 					}
 				}
 			}
@@ -156,7 +160,7 @@ func copyWorkflow(glueConnection *glue.Client, conf conf) {
 					}
 					if node.TriggerDetails.Trigger.Predicate.Conditions[i].CrawlerName != nil {
 						// NOTE: In case of crawler does not exists, the (obviously not working) workflow will be created without issue
-						node.TriggerDetails.Trigger.Predicate.Conditions[i].CrawlerName = aws.String(conf.Prefix + *node.TriggerDetails.Trigger.Predicate.Conditions[i].CrawlerName)
+						node.TriggerDetails.Trigger.Predicate.Conditions[i].CrawlerName = aws.String(conf.Prefix + "-" + *node.TriggerDetails.Trigger.Predicate.Conditions[i].CrawlerName)
 					}
 				}
 			}
@@ -171,7 +175,7 @@ func copyWorkflow(glueConnection *glue.Client, conf conf) {
 			if node.TriggerDetails.Trigger.Type != gluetypes.TriggerTypeOnDemand {
 				start = true
 			}
-			if _, err = glueConnection.CreateTrigger(context.Background(), &glue.CreateTriggerInput{
+			if _, err = glueTargetRegionClient.CreateTrigger(context.Background(), &glue.CreateTriggerInput{
 				Actions:         node.TriggerDetails.Trigger.Actions,
 				Name:            node.TriggerDetails.Trigger.Name,
 				Type:            node.TriggerDetails.Trigger.Type,
@@ -180,7 +184,7 @@ func copyWorkflow(glueConnection *glue.Client, conf conf) {
 				Schedule:        node.TriggerDetails.Trigger.Schedule,
 				StartOnCreation: start,
 				Tags:            nil,
-				WorkflowName:    node.TriggerDetails.Trigger.WorkflowName}); err != nil {
+				WorkflowName:    workflowName}); err != nil {
 				panic(err)
 			}
 		}
