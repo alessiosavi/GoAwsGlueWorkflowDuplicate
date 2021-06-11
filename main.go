@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	awsutils "github.com/alessiosavi/GoGPUtils/aws"
 	fileutils "github.com/alessiosavi/GoGPUtils/files"
 	stringutils "github.com/alessiosavi/GoGPUtils/string"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/glue"
 	gluetypes "github.com/aws/aws-sdk-go-v2/service/glue/types"
 	"io/ioutil"
@@ -63,20 +63,27 @@ func main() {
 }
 
 func copyWorkflow(conf conf) {
-	cfg, err := config.LoadDefaultConfig(context.Background())
+	cfg, err := awsutils.New()
 	if err != nil {
 		panic(err)
 	}
 	glueBaseRegionClient := glue.New(glue.Options{Credentials: cfg.Credentials, Region: conf.WorkflowRegion})
 	glueTargetRegionClient := glue.New(glue.Options{Credentials: cfg.Credentials, Region: conf.WorkflowTargetRegion})
 
+	// Set the string that have to be replaced during the creation of the new workflow
+	var toReplace []string
+	for k, v := range conf.Replacer {
+		toReplace = append(toReplace, k)
+		toReplace = append(toReplace, v)
+	}
+	replacer := strings.NewReplacer(toReplace...)
 	workflows, err := glueTargetRegionClient.ListWorkflows(context.Background(), &glue.ListWorkflowsInput{})
 	if err != nil {
 		panic(err)
 	}
 	// Remove the workflow if already exists
 	for _, workflow := range workflows.Workflows {
-		if workflow == conf.Prefix+conf.WorkflowName {
+		if workflow == replacer.Replace(conf.WorkflowName) {
 			getWorkflow, err := glueTargetRegionClient.GetWorkflow(context.Background(), &glue.GetWorkflowInput{
 				Name:         aws.String(workflow),
 				IncludeGraph: aws.Bool(true),
@@ -106,11 +113,12 @@ func copyWorkflow(conf conf) {
 		Name:         aws.String(conf.WorkflowName),
 		IncludeGraph: aws.Bool(true),
 	})
+
 	if err != nil {
 		panic(err)
 	}
 	// Create a new workflow with the same properties
-	workflowName := aws.String(conf.Prefix + "-" + conf.WorkflowName)
+	workflowName := aws.String(replacer.Replace(conf.WorkflowName))
 	_, err = glueTargetRegionClient.CreateWorkflow(context.Background(), &glue.CreateWorkflowInput{
 		Name:                 workflowName,
 		DefaultRunProperties: workflow.Workflow.DefaultRunProperties,
@@ -121,32 +129,25 @@ func copyWorkflow(conf conf) {
 		panic(err)
 	}
 
-	// Set the string that have to be replaced during the creation of the new workflow
-	var toReplace []string
-	for k, v := range conf.Replacer {
-		toReplace = append(toReplace, k)
-		toReplace = append(toReplace, v)
-	}
-	replacer := strings.NewReplacer(toReplace...)
-
 	nodes := workflow.Workflow.Graph.Nodes
 	for _, node := range nodes {
+		node.Name = aws.String(replacer.Replace(*node.Name))
 		log.Println("Name: " + *node.Name)
-		node.Name = aws.String(conf.Prefix + *node.Name)
+
 		if node.TriggerDetails != nil && node.TriggerDetails.Trigger != nil {
 			node.TriggerDetails.Trigger.WorkflowName = workflowName
 
 			if len(node.TriggerDetails.Trigger.Actions) > 0 {
-				node.TriggerDetails.Trigger.Name = aws.String(conf.Prefix + *node.TriggerDetails.Trigger.Name)
+				node.TriggerDetails.Trigger.Name = aws.String(replacer.Replace(*node.TriggerDetails.Trigger.Name))
 				for i := range node.TriggerDetails.Trigger.Actions {
 					if node.TriggerDetails.Trigger.Actions[i].JobName != nil {
 						jobName := replacer.Replace(*node.TriggerDetails.Trigger.Actions[i].JobName)
 						// NOTE: In case of job does not exists, the (obviously not working) workflow will be created without issue
-						node.TriggerDetails.Trigger.Actions[i].JobName = aws.String(conf.Prefix + jobName)
+						node.TriggerDetails.Trigger.Actions[i].JobName = aws.String(replacer.Replace(jobName))
 					}
 					if node.TriggerDetails.Trigger.Actions[i].CrawlerName != nil {
 						// NOTE: In case of crawler does not exists, the (obviously not working) workflow will be created without issue
-						node.TriggerDetails.Trigger.Actions[i].CrawlerName = aws.String(conf.Prefix + "-" + *node.TriggerDetails.Trigger.Actions[i].CrawlerName)
+						node.TriggerDetails.Trigger.Actions[i].CrawlerName = aws.String(replacer.Replace(*node.TriggerDetails.Trigger.Actions[i].CrawlerName))
 					}
 				}
 			}
@@ -156,11 +157,11 @@ func copyWorkflow(conf conf) {
 					if node.TriggerDetails.Trigger.Predicate.Conditions[i].JobName != nil {
 						jobName := replacer.Replace(*node.TriggerDetails.Trigger.Predicate.Conditions[i].JobName)
 						// NOTE: In case of job does not exists, the (obviously not working) workflow will be created without issue
-						node.TriggerDetails.Trigger.Predicate.Conditions[i].JobName = aws.String(conf.Prefix + jobName)
+						node.TriggerDetails.Trigger.Predicate.Conditions[i].JobName = aws.String(replacer.Replace(jobName))
 					}
 					if node.TriggerDetails.Trigger.Predicate.Conditions[i].CrawlerName != nil {
 						// NOTE: In case of crawler does not exists, the (obviously not working) workflow will be created without issue
-						node.TriggerDetails.Trigger.Predicate.Conditions[i].CrawlerName = aws.String(conf.Prefix + "-" + *node.TriggerDetails.Trigger.Predicate.Conditions[i].CrawlerName)
+						node.TriggerDetails.Trigger.Predicate.Conditions[i].CrawlerName = aws.String(replacer.Replace(*node.TriggerDetails.Trigger.Predicate.Conditions[i].CrawlerName))
 					}
 				}
 			}
