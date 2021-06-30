@@ -19,7 +19,6 @@ type conf struct {
 	WorkflowName         string            `json:"workflow_name"`
 	WorkflowRegion       string            `json:"workflow_region"`
 	WorkflowTargetRegion string            `json:"workflow_target_region"`
-	Prefix               string            `json:"prefix"`
 	Replacer             map[string]string `json:"replacer"`
 }
 
@@ -27,9 +26,7 @@ func (c *conf) Validate() {
 	if stringutils.IsBlank(c.WorkflowName) {
 		panic("workflow_name parameter not provided")
 	}
-	if stringutils.IsBlank(c.Prefix) {
-		panic("prefix parameter not provided")
-	}
+
 }
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Llongfile)
